@@ -1,3 +1,6 @@
+# ── Digital Surgeon Workbench ──
+# SniggitySnail × Nyx
+# ──────────────────────────────
 
 #!/usr/bin/env python3
 """
@@ -7,9 +10,18 @@ Use this to preview the "feel" before the DM3058E arrives.
 
 Usage:
   python3 dm3058e_dash_mock.py
+  python3 dm3058e_dash_mock.py --interval 0.25 --window 60 --v_nom 5.0 --i_nom 0.25
+
+Keys:
+  q  quit
+
+Notes:
+  - This is a MOCK: it generates data (sine + noise). No hardware required.
+  - When your DM3058E arrives, we'll swap the generator with real reads.
 """
 
-import argparse, math, os, random, shutil, sys, time, select
+import argparse, math, os, random, shutil, sys, time
+import select
 
 def clamp(x, a, b):
     return a if x < a else b if x > b else x
@@ -38,8 +50,14 @@ def hbar(value, minv, maxv, width, units=""):
 
 def colorize(text, color):
     colors = {
-        "red": "\033[31m", "green": "\033[32m", "yellow": "\033[33m",
-        "cyan": "\033[36m", "reset": "\033[0m"
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "cyan": "\033[36m",
+        "reset": "\033[0m",
+        "magenta": "\033[35m",
+        "blue": "\033[34m",
+        "white": "\033[37m",
     }
     return f"{colors.get(color,'')}{text}{colors['reset']}"
 
@@ -56,12 +74,12 @@ def readch():
 
 def main():
     ap = argparse.ArgumentParser(description="ASCII dashboard (mock)")
-    ap.add_argument("--interval", type=float, default=0.25)
-    ap.add_argument("--window", type=float, default=60.0)
-    ap.add_argument("--v_nom", type=float, default=5.0)
-    ap.add_argument("--i_nom", type=float, default=0.25)
-    ap.add_argument("--v_tol", type=float, default=0.05)
-    ap.add_argument("--i_max", type=float, default=1.0)
+    ap.add_argument("--interval", type=float, default=0.25, help="Seconds between updates")
+    ap.add_argument("--window", type=float, default=60.0, help="Rolling window seconds")
+    ap.add_argument("--v_nom", type=float, default=5.0, help="Nominal voltage")
+    ap.add_argument("--i_nom", type=float, default=0.25, help="Nominal current (A)")
+    ap.add_argument("--v_tol", type=float, default=0.05, help="±V tolerance for 'Stable' status")
+    ap.add_argument("--i_max", type=float, default=1.0, help="Overcurrent threshold (A)")
     args = ap.parse_args()
 
     term_width = shutil.get_terminal_size((100, 25)).columns
@@ -70,13 +88,25 @@ def main():
     max_pts = max(10, int(args.window / max(0.05, args.interval)))
     v_hist, i_hist = [], []
 
+    try:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        raw_mode = True
+    except Exception:
+        raw_mode = False
+        old_settings = None
+
     t0 = time.time()
     try:
         while True:
             t = time.time() - t0
+
             v = args.v_nom + 0.02*math.sin(2*math.pi*(t/8.0)) + random.uniform(-0.005, 0.005)
             i = args.i_nom + 0.05*math.sin(2*math.pi*(t/6.0)) + random.uniform(-0.01, 0.01)
-            v, i = max(0.0, v), max(0.0, i)
+            v = max(0.0, v)
+            i = max(0.0, i)
 
             v_hist.append(v); i_hist.append(i)
             if len(v_hist) > max_pts: v_hist.pop(0)
@@ -94,10 +124,13 @@ def main():
             clear_screen()
             print(colorize("┌────────── Digital Surgeon (Mock) ──────────┐", "cyan"))
             print(f"│ Time: {t:7.2f}s".ljust(47) + "│")
+            print("│".ljust(47) + "│")
             print(f"│ Voltage: {hbar(v, args.v_nom-0.2, args.v_nom+0.2, graph_width, ' V')}".ljust(47) + "│")
             print(f"│ Current: {hbar(i, 0.0, args.i_max*1.2, graph_width, ' A')}".ljust(47) + "│")
+            print("│".ljust(47) + "│")
             print(f"│ V Hist:  {sparkline(v_hist, graph_width)}".ljust(47) + "│")
             print(f"│ I Hist:  {sparkline(i_hist, graph_width)}".ljust(47) + "│")
+            print("│".ljust(47) + "│")
             print(f"│ Status: {status}".ljust(47) + "│")
             print(colorize("└────────────────────────────────────────────┘", "cyan"))
             print("  q: quit")
@@ -105,9 +138,12 @@ def main():
             ch = readch()
             if ch and ch.lower() == 'q':
                 break
+
             time.sleep(max(0.01, args.interval))
     finally:
-        pass
+        if raw_mode and old_settings is not None:
+            import termios
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 if __name__ == "__main__":
     main()
